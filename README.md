@@ -81,8 +81,29 @@ cache/
 *.sqlite
 *.pkl
 ```
+# F1-SIM — Data-Driven Pit-stop Strategy Simulator
 
-* Optionally use [Git LFS](https://git-lfs.github.com/) for handling large model files.
+This repository implements the F1-SIM pipeline from the paper:
+**Data-Driven Pit-Stop Strategy Optimization in Formula 1: Simulation, Prediction, and Policy Evaluation**  
+Authors: Srimadhav Seebu Kumar, Seyan Singampalli, Dr. Dinakaran M.
+
+## Quick links
+- Paper: included in the project repository (see `/paper/` or upload final PDF)
+- Code: this repo
+- Demo (interactive): https://f1-sim-demo.vercel.app *(placeholder — update when deployed)*
+- Dataset summary: `data_summary.json`
+- Models and metadata: `/models` and `/models/metadata`
+
+## Reproducibility statement
+All experiments in the paper are reproducible with the code here. For exact dataset counts, preprocessing, splits, seed, and hyperparameters see `data_summary.json` and `/models/metadata/*_meta.json`.
+
+## Requirements
+Install required packages (pinned versions provided):
+
+```bash
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
 
 ---
 
