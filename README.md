@@ -81,7 +81,7 @@ cache/
 *.sqlite
 *.pkl
 ```
-# F1-SIM — Data-Driven Pit-stop Strategy Simulator
+
 
 This repository implements the F1-SIM pipeline from the paper:
 **Data-Driven Pit-Stop Strategy Optimization in Formula 1: Simulation, Prediction, and Policy Evaluation**  
@@ -90,7 +90,6 @@ Authors: Srimadhav Seebu Kumar, Seyan Singampalli, Dr. Dinakaran M.
 ## Quick links
 - Paper: included in the project repository (see `/paper/` or upload final PDF)
 - Code: this repo
-- Demo (interactive): https://f1-sim-demo.vercel.app *(placeholder — update when deployed)*
 - Dataset summary: `data_summary.json`
 - Models and metadata: `/models` and `/models/metadata`
 
