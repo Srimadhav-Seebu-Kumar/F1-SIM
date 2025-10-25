@@ -1,136 +1,88 @@
-import fastf1
-import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.animation as animation
-import numpy as np
+import argparse
 import joblib
+import numpy as np
+import pandas as pd
 import os
+import json
+import random
 
-# Enable cache
-cache_dir = 'cache'
-os.makedirs(cache_dir, exist_ok=True)
-fastf1.Cache.enable_cache(cache_dir)
+def sample_safety_cars(num_scenarios, race_length, seed=None):
+    """Return list of scenarios; each scenario is a list of SC insertion laps."""
+    np.random.seed(seed)
+    # Fit Poisson on historical SC counts is done offline; use lambda=expected_sc per race type (example lambda=0.5)
+    lam = 0.5
+    scenarios = []
+    for i in range(num_scenarios):
+        k = np.random.poisson(lam)
+        sc_laps = []
+        if k > 0:
+            # uniformly sample insertion laps across race length
+            sc_laps = list(np.random.randint(1, race_length+1, size=k))
+            sc_laps.sort()
+        scenarios.append(sc_laps)
+    return scenarios
 
-# --- Setup ---
-year = 2023
-track_name = 'Silverstone'
-driver_code = 'LEC'  # Charles Leclerc short code
+def evaluate_strategy_on_scenario(strategy, baseline_strategy, scenario, lap_time_predictor, pit_delta):
+    # strategy: list of pit laps e.g., [25], baseline_strategy similar
+    # This function should simulate lap by lap applying pit delta on pit laps and adding SC time effects
+    # For brevity assume lap_time_predictor.predict(lap_features) returns lap_time
+    # Return total_time_model, total_time_actual
+    total_model = 0.0
+    total_actual = 0.0
+    race_length = 52  # should be derived per race
+    for lap in range(1, race_length+1):
+        # determine features for lap for predictor (user to implement)
+        features = construct_features_for_lap(lap, scenario)
+        lap_t = lap_time_predictor.predict([features])[0]
+        total_model += lap_t
+        total_actual += lap_t
+        if lap in strategy:
+            total_model += pit_delta
+        if lap in baseline_strategy:
+            total_actual += pit_delta
+    # apply safety car lap time adjustments (coarse approach)
+    # If any SC in scenario, add small adjustments or re-run per-lap predictor with SC flag
+    return total_model, total_actual
 
-# Load session
-session = fastf1.get_session(year, track_name, 'R')
-session.load()
+def run_evaluation(models_dir, races_df, scenarios_per_race=200, out_csv="results/deltaT.csv", seed=42):
+    random.seed(seed)
+    np.random.seed(seed)
 
-laps_all = session.laps.pick_driver(driver_code)
-actual_laps = laps_all.copy()
-telemetry_base = actual_laps.pick_fastest().get_telemetry()
+    # load models
+    pitstop_clf = joblib.load(os.path.join(models_dir, "pitstop_classifier.pkl"))
+    pitlap1 = joblib.load(os.path.join(models_dir, "pitlap1_regressor.pkl"))
+    pitlap2 = joblib.load(os.path.join(models_dir, "pitlap2_regressor.pkl"))
 
-# --- Get actual pit stops ---
-actual_pit_laps = actual_laps[actual_laps['PitInTime'].notnull()]['LapNumber'].values
+    results = []
+    for idx, race in races_df.iterrows():
+        race_length = int(race.total_laps)
+        scenarios = sample_safety_cars(scenarios_per_race, race_length, seed + idx)
+        # baseline_strategy: derive from race actual pit stops
+        baseline_strategy = race.actual_pit_laps  # expects list
+        # model_strategy: use classifier to predict number of stops then regressors for lap
+        pred_count = pitstop_clf.predict([race.feature_vector])[0]
+        if pred_count == 1:
+            pred_lap = int(pitlap1.predict([race.feature_vector])[0])
+            model_strategy = [max(1, min(pred_lap, race_length))]
+        else:
+            l1 = int(pitlap1.predict([race.feature_vector])[0])
+            l2 = int(pitlap2.predict([race.feature_vector])[0])
+            model_strategy = [max(1, min(l1, race_length)), max(1, min(l2, race_length))]
 
-# --- Predict pitstops ---
-sample = pd.DataFrame([{
-    'Track': 'Silverstone',
-    'Driver': 'Charles Leclerc',
-    'Compounds': 'Medium,Hard',
-    'TrackType': 'Balanced',
-    'Rainfall_max': False,
-    'Year': 2023,
-    'TyreLife_max': 22,
-    'AirTemp_mean': 21.2,
-    'TrackTemp_mean': 35.5,
-    'Humidity_mean': 60.0,
-    'TotalLaps_first': 52
-}])
-
-clf = joblib.load('pitstop_classifier.pkl')
-reg1 = joblib.load('pitlap1_regressor.pkl')
-reg2 = joblib.load('pitlap2_regressor.pkl')
-
-n_stops = clf.predict(sample)[0]
-pit1 = round(reg1.predict(sample)[0])
-pit2 = round(reg2.predict(sample)[0]) if n_stops == 2 else None
-predicted_pits = [pit1] + ([pit2] if pit2 else [])
-
-# --- Simulate both strategies ---
-actual_times = actual_laps['LapTime'].dt.total_seconds().dropna().values
-predicted_strategy = actual_laps.copy()
-for lap in predicted_strategy.itertuples():
-    if lap.LapNumber in predicted_pits and lap.LapTime is not pd.NaT:
-        predicted_strategy.at[lap.Index, 'LapTime'] += pd.to_timedelta(20, unit='s')  # add 20s as timedelta
-
-
-predicted_times = predicted_strategy['LapTime'].dt.total_seconds().dropna().values
-
-# --- Plot lap time comparison ---
-plt.figure(figsize=(10, 5))
-plt.plot(actual_laps['LapNumber'], actual_times, label='Actual Strategy', marker='o')
-plt.plot(predicted_strategy['LapNumber'], predicted_times, label='Predicted Strategy', marker='x')
-
-for lap in actual_pit_laps:
-    plt.axvline(lap, color='green', linestyle='--', label='Actual Pit' if lap == actual_pit_laps[0] else "")
-for lap in predicted_pits:
-    plt.axvline(lap, color='blue', linestyle=':', label='Predicted Pit' if lap == predicted_pits[0] else "")
-
-plt.title(f"{driver_code} – Lap Time Comparison")
-plt.xlabel('Lap Number')
-plt.ylabel('Lap Time (s)')
-plt.legend()
-plt.tight_layout()
-plt.show()
-
-# --- Track animation for both strategies ---
-fig, ax = plt.subplots()
-ax.set_title(f"{driver_code} – Track Simulation (Actual vs Predicted)")
-ax.set_xlabel("X")
-ax.set_ylabel("Y")
-
-ax.plot(telemetry_base['X'], telemetry_base['Y'], color='gray', linestyle='--', linewidth=1)
-
-# Use fastest lap as base for animation (loop over it)
-telemetry = telemetry_base
-frames = len(telemetry)
-
-scatter_actual = ax.scatter([], [], color='red', label='Actual Strategy')
-scatter_pred = ax.scatter([], [], color='blue', label='Predicted Strategy')
-
-# Mark pit stops
-for lap in actual_pit_laps:
-    lap_data = actual_laps[actual_laps['LapNumber'] == lap]
-    if not lap_data.empty:
-        try:
-            tel = lap_data.iloc[0].get_telemetry()
-            ax.plot(tel['X'].iloc[0], tel['Y'].iloc[0], 'go', label='Actual Pit' if lap == actual_pit_laps[0] else "")
-        except:
-            continue
-
-for lap in predicted_pits:
-    lap_data = actual_laps[actual_laps['LapNumber'] == lap]
-    if not lap_data.empty:
-        try:
-            tel = lap_data.iloc[0].get_telemetry()
-            ax.plot(tel['X'].iloc[0], tel['Y'].iloc[0], 'bo', label='Predicted Pit' if lap == predicted_pits[0] else "")
-        except:
-            continue
-
-def update(i):
-    x = telemetry['X'].iloc[i]
-    y = telemetry['Y'].iloc[i]
-    scatter_actual.set_offsets([x, y])
-    scatter_pred.set_offsets([x + 2, y])  # offset slightly to show both
-    return scatter_actual, scatter_pred
-
-ax.legend()
-ani = animation.FuncAnimation(fig, update, frames=frames, interval=1, blit=True)
-plt.show()
-
-# --- Final Comparison ---
-total_actual_time = np.sum(actual_times)
-total_predicted_time = np.sum(predicted_times)
-
-print(f"🟢 Actual Strategy Total Time: {total_actual_time:.1f} seconds")
-print(f"🔵 Predicted Strategy Total Time: {total_predicted_time:.1f} seconds")
-
-if total_predicted_time < total_actual_time:
-    print("✅ Predicted strategy is faster!")
-else:
-    print("❌ Actual strategy was better.")
+        # simulate over scenarios
+        delta_list = []
+        for s in scenarios:
+            total_model, total_actual = evaluate_strategy_on_scenario(model_strategy, baseline_strategy, s, lap_time_predictor=DummyLapPredictor(), pit_delta=race.pit_delta)
+            delta_list.append(total_actual - total_model)
+        results.append({
+            "race_id": race.race_id,
+            "pred_count": int(pred_count),
+            "actual_count": len(baseline_strategy),
+            "mean_deltaT": float(np.mean(delta_list)),
+            "std_deltaT": float(np.std(delta_list)),
+            "median_deltaT": float(np.median(delta_list))
+        })
+    out_df = pd.DataFrame(results)
+    os.makedirs(os.path.dirname(out_csv), exist_ok=True)
+    out_df.to_csv(out_csv, index=False)
+    print("Wrote deltaT results to", out_csv)
