@@ -328,7 +328,84 @@ try:
         'Feature': all_features[:len(importances)],
         'Importance': importances
     }).sort_values('Importance', ascending=False)
-    
+
+
+
+
+    # --- at top imports ---
+import argparse
+import json
+import os
+import joblib
+import random
+import numpy as np
+import datetime
+import subprocess
+
+# --- add helper to get git commit ---
+def get_git_commit_hash():
+    try:
+        out = subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode().strip()
+        return out
+    except Exception:
+        return None
+
+# --- CLI args ---
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output_dir", type=str, default="models")
+    parser.add_argument("--seed", type=int, default=42)
+    args = parser.parse_args()
+
+    seed = args.seed
+    random.seed(seed)
+    np.random.seed(seed)
+
+    os.makedirs(args.output_dir, exist_ok=True)
+    os.makedirs(os.path.join(args.output_dir, "metadata"), exist_ok=True)
+
+    # ... existing training code here: train model objects: pitstop_clf, pitlap1, pitlap2 ...
+
+    # Example: save models
+    joblib.dump(pitstop_clf, os.path.join(args.output_dir, "pitstop_classifier.pkl"))
+    joblib.dump(pitlap1_regressor, os.path.join(args.output_dir, "pitlap1_regressor.pkl"))
+    joblib.dump(pitlap2_regressor, os.path.join(args.output_dir, "pitlap2_regressor.pkl"))
+
+    # Save metadata
+    features = feature_columns  # ensure this is the list you used
+    metadata_common = {
+        "created_at": datetime.datetime.utcnow().isoformat() + "Z",
+        "git_commit": get_git_commit_hash(),
+        "seed": seed,
+        "python_version": f"{sys.version_info.major}.{sys.version_info.minor}",
+        "num_features": len(features),
+        "feature_list": features
+    }
+
+    # per-model metadata
+    pitstop_meta = dict(metadata_common)
+    pitstop_meta.update({
+        "model_type": type(pitstop_clf).__name__,
+        "hyperparameters": pitstop_clf.get_params()
+    })
+    with open(os.path.join(args.output_dir, "metadata", "pitstop_classifier_meta.json"), "w") as fh:
+        json.dump(pitstop_meta, fh, indent=2)
+
+    # repeat for pitlap1, pitlap2
+    pitlap1_meta = dict(metadata_common)
+    pitlap1_meta.update({
+        "model_type": type(pitlap1_regressor).__name__,
+        "hyperparameters": pitlap1_regressor.get_params() if hasattr(pitlap1_regressor, "get_params") else {}
+    })
+    with open(os.path.join(args.output_dir, "metadata", "pitlap1_regressor_meta.json"), "w") as fh:
+        json.dump(pitlap1_meta, fh, indent=2)
+
+    # feature list file
+    with open(os.path.join(args.output_dir, "metadata", "features.json"), "w") as fh:
+        json.dump({"features": features}, fh, indent=2)
+
+    print("Saved models and metadata to", args.output_dir)
+
     count_importance.to_csv('plots/count_feature_importance.csv', index=False)
     print("Feature importance data saved to CSV")
 except Exception as e:
